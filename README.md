@@ -31,6 +31,7 @@ Next.js 16 (App Router) · React 19 · TypeScript · Tailwind CSS 4 · SVG.
 ## Ажиллуулах
 
 ```bash
+cd web
 npm install
 npm run dev
 ```
@@ -41,11 +42,11 @@ npm run dev
 
 | Файл | Үүрэг |
 | --- | --- |
-| `app/page.tsx` | Хуудас |
-| `app/_lab/ReflectionLab.tsx` | Төлөв, үйлдлүүд, хуудасны байрлал |
-| `app/_lab/Scene.tsx` | Оптикийн ширээ (SVG, чирэх, гарын удирдлага) |
-| `app/_lab/optics.ts` | Тоног төхөөрөмж, цацрагийн тооцоо, хэмжилт |
-| `app/_lab/geometry.ts` | Векторын функцууд |
-| `app/_lab/Results.tsx` | Хэмжилтийн хүснэгт, график, дүн |
-| `app/_lab/lesson.ts` | Хичээлийн агуулга |
-| `app/_lab/ui.tsx` | Туслах бүрэлдэхүүн хэсгүүд |
+| `web/app/page.tsx` | Хуудас |
+| `web/app/_lab/ReflectionLab.tsx` | Төлөв, үйлдлүүд, хуудасны байрлал |
+| `web/app/_lab/Scene.tsx` | Оптикийн ширээ (SVG, чирэх, гарын удирдлага) |
+| `web/app/_lab/optics.ts` | Тоног төхөөрөмж, цацрагийн тооцоо, хэмжилт |
+| `web/app/_lab/geometry.ts` | Векторын функцууд |
+| `web/app/_lab/Results.tsx` | Хэмжилтийн хүснэгт, график, дүн |
+| `web/app/_lab/lesson.ts` | Хичээлийн агуулга |
+| `web/app/_lab/ui.tsx` | Туслах бүрэлдэхүүн хэсгүүд |
