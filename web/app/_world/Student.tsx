@@ -102,6 +102,124 @@ function hangStraight(
   }
 }
 
+/** Ханцуй мөрнөөс доош аажим нарийсна (1 см тутамд ≤ SLOPE): доорх цамцны ханцуйн ирмэг,
+    мөрний товгор халатан дээр шат болж гарахгүй. Орой бүрийг зөвхөн гадагш түлхэнэ. */
+function smoothSleeve(
+  pos: THREE.BufferAttribute | THREE.InterleavedBufferAttribute,
+  nor: THREE.BufferAttribute | THREE.InterleavedBufferAttribute,
+  ids: number[],
+  joints: THREE.Vector3[],
+  /** Мөрний оройн (эгэмний) оройнууд: ханцуй тэднээс эхэлж нарийсна, өөрсдөө хөдлөхгүй */
+  refs: number[],
+  /** Ханцуйн зузаан: normal-ын дагуу биш, тэнхлэгээс радиусаар тэлнэ (доорх цамцны ханцуйн
+      ирмэгийн normal доош харсан тул тэнхлэгийн дагуу гулсаж атираа гаргадаг) */
+  pad: number,
+) {
+  if (!ids.length) return;
+  const BIN_T = 0.01 * U;
+  const BIN_A = 16;
+  const SLOPE = 0.12 * BIN_T;
+  const MAX = 0.02 * U;
+  const segs = [
+    [joints[0], joints[1]],
+    [joints[1], joints[2]],
+  ];
+  const p = new THREE.Vector3();
+  const measure = (i: number) => {
+    p.fromBufferAttribute(pos, i);
+    let best = { dist: Infinity, c: new THREE.Vector3(), t: 0, dir: new THREE.Vector3() };
+    let offset = 0;
+    for (const [a, b] of segs) {
+      const d = b.clone().sub(a);
+      const len = d.length();
+      const u = THREE.MathUtils.clamp(p.clone().sub(a).dot(d) / (len * len), 0, 1);
+      const c = a.clone().addScaledVector(d, u);
+      const dist = p.distanceTo(c);
+      if (dist < best.dist) best = { dist, c, t: offset + u * len, dir: d.normalize() };
+      offset += len;
+    }
+    const r = p.clone().sub(best.c);
+    const ref = new THREE.Vector3(0, 0, 1).addScaledVector(best.dir, -best.dir.z).normalize();
+    const side = new THREE.Vector3().crossVectors(best.dir, ref);
+    const ang = Math.atan2(r.dot(side), r.dot(ref));
+    return {
+      i,
+      c: best.c,
+      rhat: r.clone().normalize(),
+      rad: r.length(),
+      // Мөрний үеэс гадагш (гар тийш) байгаа эсэх
+      lateral: p.clone().sub(joints[0]).dot(segs[0][1].clone().sub(joints[0])) > 0,
+      tb: Math.floor(best.t / BIN_T),
+      ab: Math.floor(((ang + Math.PI) / (2 * Math.PI)) * BIN_A) % BIN_A,
+    };
+  };
+  const info = ids.map(measure).map((x) => ({ ...x, rad: x.rad + pad }));
+  const cap = refs.map(measure).filter((x) => x.lateral && x.rad < 0.07 * U);
+  const T = Math.max(...info.map((x) => x.tb), ...cap.map((x) => x.tb)) + 1;
+  const raw = new Float32Array(T * BIN_A);
+  for (const x of [...info, ...cap]) raw[x.tb * BIN_A + x.ab] = Math.max(raw[x.tb * BIN_A + x.ab], x.rad);
+  // Мөрнөөс бугуй руу: радиус огцом багасахгүй, налуугаар л нарийсна
+  const env = new Float32Array(T * BIN_A);
+  for (let a = 0; a < BIN_A; a++)
+    for (let t = 0; t < T; t++)
+      env[t * BIN_A + a] = Math.max(raw[t * BIN_A + a], t ? env[(t - 1) * BIN_A + a] - SLOPE : 0);
+  // Хөрш өнцгүүдээр жигдэлж, нэг талд нь сэрвээ гаргахгүй
+  const sm = env.map((_, k) => {
+    const t = Math.floor(k / BIN_A);
+    const a = k % BIN_A;
+    const at = (d: number) => env[t * BIN_A + ((a + d + BIN_A) % BIN_A)];
+    return (at(-1) + 2 * at(0) + at(1)) / 4;
+  });
+  for (const x of info) {
+    const r = Math.min(Math.max(x.rad, sm[x.tb * BIN_A + x.ab]), x.rad + MAX);
+    pos.setXYZ(x.i, x.c.x + x.rhat.x * r, x.c.y + x.rhat.y * r, x.c.z + x.rhat.z * r);
+    // Ханцуй хоолой хэлбэртэй: normal тэнхлэгээс гадагш (доорх ирмэгийн доош харсан normal харанхуй зураас гаргахгүй)
+    nor.setXYZ(x.i, x.rhat.x, x.rhat.y, x.rhat.z);
+  }
+}
+
+/** Мөрний оройг (эгэм, нурууны хэсэг) гарын тэнхлэгийн дагуу аажмаар бугалганы ясанд шилжүүлнэ:
+    гар доош унжихад орой нь ханцуйн дээгүүр тусдаа бүрхүүл шиг хэлтэрч үлдэхгүй. */
+function blendShoulder(mesh: THREE.SkinnedMesh, s: "L" | "R") {
+  const bones = mesh.skeleton.bones;
+  const A = bones.findIndex((b) => b.name === `Bip02_${s}_UpperArm`);
+  const F = bones.findIndex((b) => b.name === `Bip02_${s}_Forearm`);
+  if (A < 0 || F < 0) return;
+  const S = bones[A].getWorldPosition(new THREE.Vector3());
+  const dir = bones[F].getWorldPosition(new THREE.Vector3()).sub(S).normalize();
+  const g = mesh.geometry;
+  const pos = g.getAttribute("position");
+  const idx = g.getAttribute("skinIndex");
+  const w = g.getAttribute("skinWeight");
+  const p = new THREE.Vector3();
+  const T0 = -0.03 * U;
+  const T1 = 0.08 * U;
+  for (let i = 0; i < pos.count; i++) {
+    p.fromBufferAttribute(pos, i);
+    // Мөрний үеэс гадагш, суганаас дээш л (их бие, хүзүүг хөндөхгүй)
+    if (Math.sign(p.x) !== Math.sign(S.x) || Math.abs(p.x) < Math.abs(S.x) - 0.02 * U || p.y < S.y - 0.06 * U) continue;
+    p.sub(S);
+    const t = p.dot(dir);
+    if (t < T0 || t > T1 || p.addScaledVector(dir, -t).length() > 0.09 * U) continue;
+    const k = THREE.MathUtils.smoothstep(t, T0, T1);
+    // Жингийн векторыг цэвэр бугалга руу k-аар холино (байхгүй бол хамгийн бага жинтэй үүрийг эзэлнэ)
+    const ids = [0, 1, 2, 3].map((j) => idx.getComponent(i, j));
+    const ws = [0, 1, 2, 3].map((j) => w.getComponent(i, j) * (1 - k));
+    let slot = ids.indexOf(A);
+    if (slot < 0) {
+      slot = ws.indexOf(Math.min(...ws));
+      ids[slot] = A;
+      ws[slot] = 0;
+    }
+    ws[slot] += k;
+    const sum = ws.reduce((m, x) => m + x, 0) || 1;
+    idx.setXYZW(i, ids[0], ids[1], ids[2], ids[3]);
+    w.setXYZW(i, ws[0] / sum, ws[1] / sum, ws[2] / sum, ws[3] / sum);
+  }
+  idx.needsUpdate = true;
+  w.needsUpdate = true;
+}
+
 /** Их бие, ханцуйг халат болгож тэлнэ. Халатны доод ирмэгийн өндрийг буцаана */
 function tailorBody(mesh: THREE.SkinnedMesh): number {
   const g = mesh.geometry;
@@ -111,23 +229,60 @@ function tailorBody(mesh: THREE.SkinnedMesh): number {
   const bones = dominantBones(mesh);
   const coat = new Float32Array(pos.count);
   const torso: number[] = [];
+  const hips: number[] = [];
+  const sleeves: Record<"L" | "R", number[]> = { L: [], R: [] };
+  const caps: Record<"L" | "R", number[]> = { L: [], R: [] };
   const inflate = (i: number, t = 0.012 * U) =>
     pos.setXYZ(i, pos.getX(i) + nor.getX(i) * t, pos.getY(i) + nor.getY(i) * t, pos.getZ(i) + nor.getZ(i) * t);
+  const shoulder = (["L", "R"] as const).map((s) =>
+    mesh.skeleton.getBoneByName(`Bip02_${s}_UpperArm`)?.getWorldPosition(new THREE.Vector3()),
+  );
+  // Мөрний үеэс гадагш, суганаас дээш орших их биеийн орой гартай хамт хөдөлдөг хэсэг
+  const onShoulder = (i: number) =>
+    shoulder.some(
+      (sh) =>
+        !!sh &&
+        Math.sign(pos.getX(i)) === Math.sign(sh.x) &&
+        Math.abs(pos.getX(i)) > Math.abs(sh.x) - 0.02 * U &&
+        pos.getY(i) > sh.y - 0.06 * U,
+    );
   for (let i = 0; i < pos.count; i++) {
     if (TORSO_BONES.test(bones[i])) {
       coat[i] = 1;
-      // Мөр (эгэм) нь T хэлбэрт өргөн тул унжуулахгүй, ханцуй шиг зузаална
-      if (bones[i].includes("Spine")) torso.push(i);
-      else inflate(i);
+      // Мөр (эгэм) нь T хэлбэрт өргөн тул унжуулахгүй, ханцуй шиг зузаална. Мөрний оройн их биеийн
+      // хэсгийг ч унжуулбал гар доош буухад ханцуйн дээгүүр тусдаа бүрхүүл шиг хэлтэрч үлддэг.
+      if (bones[i].includes("Spine") && !onShoulder(i)) torso.push(i);
+      else {
+        inflate(i);
+        caps[pos.getX(i) > 0 ? "L" : "R"].push(i); // L тал нь +x
+      }
     } else if (UNDER_COAT.test(bones[i])) {
       coat[i] = 1;
+      hips.push(i);
     } else if (SLEEVE_BONES.test(bones[i])) {
       coat[i] = 1;
-      inflate(i);
-    }
+      sleeves[bones[i].includes("_L_") ? "L" : "R"].push(i);
+    } else if (bones[i].includes("Thigh")) hips.push(i);
   }
+  // Нуруу–ташааны ясны хил зигзаг тул халатны доод ирмэгийг хэвтээ шулуунаар зүснэ:
+  // хамгийн доод нурууны оройноос дээшхи ташаа, гуяны оройг ч их биетэй хамт унжуулна
+  const bottom = torso.reduce((m, i) => Math.min(m, pos.getY(i)), Infinity);
+  for (const i of hips)
+    if (pos.getY(i) >= bottom) {
+      coat[i] = 1;
+      torso.push(i);
+    }
   hangStraight(pos, torso, 0.035 * U, 0.012 * U); // гар биеэр нэвтрэхгүйн тулд тэлэлт хязгаартай
+  for (const s of ["L", "R"] as const) {
+    blendShoulder(mesh, s);
+    const joint = (n: string) =>
+      mesh.skeleton.getBoneByName(`Bip02_${s}_${n}`)?.getWorldPosition(new THREE.Vector3());
+    const joints = [joint("UpperArm"), joint("Forearm"), joint("Hand")];
+    if (joints.every(Boolean)) smoothSleeve(pos, nor, sleeves[s], joints as THREE.Vector3[], caps[s], 0.012 * U);
+    else for (const i of sleeves[s]) inflate(i);
+  }
   pos.needsUpdate = true;
+  nor.needsUpdate = true;
   g.computeBoundingSphere();
   g.setAttribute("aCoat", new THREE.BufferAttribute(coat, 1));
   g.userData.coatBottom = torso.reduce((m, i) => Math.min(m, pos.getY(i)), Infinity);
@@ -173,8 +328,19 @@ function buildSkirt(body: THREE.SkinnedMesh, coatBottom: number, material: THREE
     const m = row.map((_, b) => Math.max(row[(b + A - 1) % A], row[b], row[(b + 1) % A]));
     return m.map((_, b) => (m[(b + A - 2) % A] + m[(b + A - 1) % A] + m[b] + m[(b + 1) % A] + m[(b + 2) % A]) / 5);
   };
+  // Их биеийн халатны доод хэсэг (давхцах бүс) хормойн дотор бүрэн орно: огтлолцож шүд гаргахгүй
+  const shell = new Float32Array(A);
+  for (const i of ids) {
+    const y = pos.getY(i);
+    if (y < coatBottom - 0.01 * U || y > top + 0.03 * U) continue;
+    const x = pos.getX(i);
+    const z = pos.getZ(i) - cz;
+    const b = binOf(Math.atan2(x, z));
+    shell[b] = Math.max(shell[b], Math.hypot(x, z));
+  }
+  const shellMax = shell.map((_, b) => Math.max(shell[(b + A - 1) % A], shell[b], shell[(b + 1) % A]));
   // Дээд цагираг халатны гадаргуу дээр, доошлох тусам бие бүрхэх хэмжээгээр шулуун унжина
-  const radii: Float32Array[] = [smooth(rows[0]).map((r) => r + 0.01 * U)];
+  const radii: Float32Array[] = [smooth(rows[0]).map((r, b) => Math.max(r, shellMax[b]) + 0.01 * U)];
   for (let j = 1; j < RINGS; j++) {
     const below = smooth(rows[j]);
     radii.push(radii[j - 1].map((r, b) => Math.max(r, below[b] + 0.022 * U) + 0.003 * U));
