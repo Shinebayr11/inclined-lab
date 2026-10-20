@@ -1,5 +1,5 @@
-import ReflectionLab from "./_lab/ReflectionLab";
+import LabWorld from "./_world/LabWorld";
 
 export default function Page() {
-  return <ReflectionLab />;
+  return <LabWorld />;
 }
