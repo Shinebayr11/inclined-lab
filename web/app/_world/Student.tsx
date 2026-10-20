@@ -593,14 +593,10 @@ function StudentBody({ avatar, anim, ikRef, firstPerson = false }: Props) {
   // Хөл бүрийн гишгэсэн цэг (дэлхийн) ба алхмын явц (t < 0 — шалан дээр тогтсон)
   const steps = useRef<{ at: THREE.Vector3; from: THREE.Vector3; to: THREE.Vector3; t: number }[] | null>(null);
   // AnimationMixer нь утга нь өөрчлөгдөөгүй ясыг дахин бичдэггүй тул IK-ийн эргэлт дараагийн кадрт
-  // хуримтлагдана. Кадр бүрийн эхэнд хөдөлгөөний (анимацийн) байрлалыг өөрсдөө сэргээнэ.
-  const pose = useMemo(
-    () => ({
-      anim: rig.touched.map(() => new THREE.Quaternion()),
-      mod: rig.touched.map(() => new THREE.Quaternion()),
-    }),
-    [rig],
-  );
+  // хуримтлагдана. Mixer-ээс өмнө (priority -1) өмнөх кадрын анимацийн утгыг буцааж тавина:
+  // mixer шинэ утга бичвэл түүгээр, бичихгүй бол яг өмнөх анимацийн утгаараа үлдэнэ.
+  const pose = useMemo(() => ({ anim: rig.touched.map((b) => b.quaternion.clone()) }), [rig]);
+  useFrame(() => rig.touched.forEach((b, i) => b.quaternion.copy(pose.anim[i])), -1);
   const last = useMemo(
     () => ({
       left: new THREE.Vector3(),
@@ -621,11 +617,7 @@ function StudentBody({ avatar, anim, ikRef, firstPerson = false }: Props) {
     const t = ikRef?.current;
     const dt = Math.min(delta, 0.05);
     rig.fingers.forEach((b, i) => b.quaternion.copy(rig.fingerRest[i]));
-    rig.touched.forEach((b, i) => {
-      // Mixer энэ кадрт бичээгүй (бидний утга хэвээр) бол анимацийн утгыг буцааж тавина
-      if (b.quaternion.angleTo(pose.mod[i]) < 1e-6) b.quaternion.copy(pose.anim[i]);
-      pose.anim[i].copy(b.quaternion);
-    });
+    rig.touched.forEach((b, i) => pose.anim[i].copy(b.quaternion));
     const k = 1 - Math.exp(-6 * dt);
     const body = model.getWorldQuaternion(new THREE.Quaternion());
     const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(body);
@@ -787,7 +779,6 @@ function StudentBody({ avatar, anim, ikRef, firstPerson = false }: Props) {
       head.quaternion.copy(head.parent!.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(turn));
       head.updateMatrixWorld(true);
     }
-    rig.touched.forEach((b, i) => pose.mod[i].copy(b.quaternion));
     // Нүдний байрлал: толгойн ясны дээр, нүүрний урд
     if (t && rig.head) {
       rig.head.getWorldPosition(t.eye).addScaledVector(UP, 0.075).addScaledVector(forward, 0.09);
