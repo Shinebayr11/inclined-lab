@@ -1,6 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { currentStudent, saveSession } from "../_ai/classLog";
+import { type JudgeResult, classifyHypothesis } from "../_ai/judge";
+import { HYPOTHESIS_AFTER, HYPOTHESIS_TEXT, REFLECTION_RUBRIC } from "../_ai/rubrics";
+import { AiCheck, StudentBar } from "../_ai/ui";
 import { clamp, dist, frameAt, toWorld } from "./geometry";
 import { LESSON, type StepId } from "./lesson";
 import {
@@ -26,6 +30,7 @@ import {
   distinctAngles,
   fillReadings,
   makeTrial,
+  measuredFromSurface,
   measuredTrials,
   orbitAngleOf,
   orbitPosition,
@@ -78,6 +83,7 @@ export default function ReflectionLab() {
   const [checked, setChecked] = useState(false);
   const [hypothesis, setHypothesis] = useState("");
   const [conclusion, setConclusion] = useState("");
+  const [judged, setJudged] = useState<JudgeResult | null>(null);
   const [tab, setTab] = useState<Tab>("content");
 
   /* ---------- Цацраг ---------- */
@@ -133,6 +139,28 @@ export default function ReflectionLab() {
     conclude: checked && conclusion.trim() !== "",
   };
   const doneCount = LESSON.steps.filter((s) => done[s.id]).length;
+  const hypothesisClass = hypothesis.trim() ? classifyHypothesis(hypothesis) : undefined;
+
+  /* ---------- Багшид дамжуулах бүртгэл ---------- */
+  function logSession(r: JudgeResult | null = judged, steps = doneCount) {
+    const slips = measured.filter(
+      (m) => measuredFromSurface(m.i, m.trueI) || measuredFromSurface(m.r, m.trueR),
+    ).length;
+    const errs = measured.map((m) => (Math.abs(m.i - m.trueI) + Math.abs(m.r - m.trueR)) / 2);
+    saveSession({
+      student: currentStudent(),
+      lab: "reflection",
+      at: Date.now(),
+      stepsDone: steps,
+      stepsTotal: LESSON.steps.length,
+      slips,
+      meanErr: errs.length ? errs.reduce((s, x) => s + x, 0) / errs.length : null,
+      hypothesis: hypothesisClass,
+      covered: r?.covered ?? [],
+      negated: r?.negated ?? [],
+      missing: r?.missing ?? REFLECTION_RUBRIC.map((x) => x.id),
+    });
+  }
 
   /* ---------- Харах талбай (томруулалт) ---------- */
   const vw = VIEW_W / zoom;
@@ -235,6 +263,12 @@ export default function ReflectionLab() {
     setAutoFill(true);
     setHypothesis("");
     setConclusion("");
+    setJudged(null);
+  }
+
+  function nextStudent() {
+    logSession();
+    resetAll();
   }
 
   const beamStatus = !sourceOn
@@ -268,6 +302,9 @@ export default function ReflectionLab() {
           <span className="rounded-full border border-emerald-800/60 bg-emerald-950/40 px-3 py-1 text-emerald-300">
             Бодит лабораторийн дарааллаар
           </span>
+        </div>
+        <div className="mt-4">
+          <StudentBar onNext={nextStudent} />
         </div>
       </header>
 
@@ -441,6 +478,11 @@ export default function ReflectionLab() {
               placeholder="Миний таамаглал..."
               className="w-full resize-none rounded-xl border border-[#22304D] bg-[#0B1324] p-3 text-sm outline-none placeholder:text-slate-600 focus:border-sky-600"
             />
+            {hypothesisClass && (
+              <p aria-live="polite" className="text-xs leading-relaxed text-sky-200">
+                🤖 {checked ? HYPOTHESIS_AFTER[hypothesisClass] : HYPOTHESIS_TEXT[hypothesisClass]}
+              </p>
+            )}
           </Card>
         </aside>
 
@@ -526,7 +568,10 @@ export default function ReflectionLab() {
               />
               <button
                 type="button"
-                onClick={() => setChecked(true)}
+                onClick={() => {
+                  setChecked(true);
+                  logSession(judged, doneCount + (conclusion.trim() ? 1 : 0));
+                }}
                 disabled={!canCheck || checked}
                 className="w-full rounded-xl border border-emerald-700/50 bg-emerald-950/40 px-4 py-2.5 text-sm font-medium text-emerald-300 transition hover:bg-emerald-900/40 disabled:cursor-not-allowed disabled:opacity-40"
               >
@@ -557,6 +602,14 @@ export default function ReflectionLab() {
               rows={3}
               placeholder="Цэгүүд ямар хэлбэртэй байна? Тусах ба ойх өнцгийн хооронд ямар хамаарал байна вэ? Алдаа юунаас болсон бэ?"
               className="w-full resize-none rounded-xl border border-[#22304D] bg-[#0B1324] p-3 text-sm outline-none placeholder:text-slate-600 focus:border-sky-600"
+            />
+            <AiCheck
+              text={conclusion}
+              rubric={REFLECTION_RUBRIC}
+              onResult={(r) => {
+                setJudged(r);
+                logSession(r);
+              }}
             />
             {checked ? (
               <div className="rounded-xl border border-emerald-800/50 bg-emerald-950/30 p-4 text-center">
