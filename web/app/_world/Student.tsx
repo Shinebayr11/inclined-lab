@@ -220,6 +220,35 @@ function blendShoulder(mesh: THREE.SkinnedMesh, s: "L" | "R") {
   w.needsUpdate = true;
 }
 
+/** Бэлхүүсэд их биеийн халатны жинг ташааны яс руу аажим шилжүүлнэ: хормой ташаанд холбогдсон тул
+    нуруу хазайхад халатны доод хэсэг хормойн гадна гарч шүд мэт харагдахгүй. */
+function blendWaist(mesh: THREE.SkinnedMesh, ids: number[], from: number, to: number) {
+  const P = mesh.skeleton.bones.findIndex((b) => b.name === "Bip02_Pelvis");
+  if (P < 0) return;
+  const g = mesh.geometry;
+  const pos = g.getAttribute("position");
+  const idx = g.getAttribute("skinIndex");
+  const w = g.getAttribute("skinWeight");
+  for (const i of ids) {
+    const k = 1 - THREE.MathUtils.smoothstep(pos.getY(i), to, from);
+    if (k <= 0) continue;
+    const bs = [0, 1, 2, 3].map((j) => idx.getComponent(i, j));
+    const ws = [0, 1, 2, 3].map((j) => w.getComponent(i, j) * (1 - k));
+    let slot = bs.indexOf(P);
+    if (slot < 0) {
+      slot = ws.indexOf(Math.min(...ws));
+      bs[slot] = P;
+      ws[slot] = 0;
+    }
+    ws[slot] += k;
+    const sum = ws.reduce((m, x) => m + x, 0) || 1;
+    idx.setXYZW(i, bs[0], bs[1], bs[2], bs[3]);
+    w.setXYZW(i, ws[0] / sum, ws[1] / sum, ws[2] / sum, ws[3] / sum);
+  }
+  idx.needsUpdate = true;
+  w.needsUpdate = true;
+}
+
 /** Их бие, ханцуйг халат болгож тэлнэ. Халатны доод ирмэгийн өндрийг буцаана */
 function tailorBody(mesh: THREE.SkinnedMesh): number {
   const g = mesh.geometry;
@@ -272,7 +301,17 @@ function tailorBody(mesh: THREE.SkinnedMesh): number {
       coat[i] = 1;
       torso.push(i);
     }
+  const flat = torso.map((i) => [pos.getX(i), pos.getZ(i)]);
   hangStraight(pos, torso, 0.035 * U, 0.012 * U); // гар биеэр нэвтрэхгүйн тулд тэлэлт хязгаартай
+  // Доод 5 см-т тэлэлтийг аажим бууруулна: тэлсэн, тэлээгүй оройн хоорондох гурвалжин
+  // ирмэг дээр шүд гаргахгүй, халат биед зөөлөн шингэж хормойн доор орно
+  const FADE = 0.05 * U;
+  torso.forEach((i, n) => {
+    const f = THREE.MathUtils.smoothstep(pos.getY(i), bottom, bottom + FADE);
+    if (f < 1) pos.setXYZ(i, THREE.MathUtils.lerp(flat[n][0], pos.getX(i), f), pos.getY(i), THREE.MathUtils.lerp(flat[n][1], pos.getZ(i), f));
+  });
+  // Хормойн орой (доод ирмэгээс 4 см дээш) хүртэлх хэсэг ташаатай хамт, түүнээс 10 см дээш аажим нуруу руу
+  blendWaist(mesh, torso, bottom + 0.14 * U, bottom + 0.04 * U);
   for (const s of ["L", "R"] as const) {
     blendShoulder(mesh, s);
     const joint = (n: string) =>
@@ -332,27 +371,47 @@ function buildSkirt(body: THREE.SkinnedMesh, coatBottom: number, material: THREE
   const shell = new Float32Array(A);
   for (const i of ids) {
     const y = pos.getY(i);
-    if (y < coatBottom - 0.01 * U || y > top + 0.03 * U) continue;
+    if (y < coatBottom - 0.01 * U || y > top + 0.12 * U) continue;
     const x = pos.getX(i);
     const z = pos.getZ(i) - cz;
     const b = binOf(Math.atan2(x, z));
     shell[b] = Math.max(shell[b], Math.hypot(x, z));
   }
-  const shellMax = shell.map((_, b) => Math.max(shell[(b + A - 1) % A], shell[b], shell[(b + 1) % A]));
+  // Жигд дээд бүрхүүл: ±W нүдний дээд утгыг ±W-ээр дундажлахад анхны утгаас хэзээ ч бага болохгүй
+  const W = 3;
+  const around = (row: Float32Array, f: (v: number[]) => number) =>
+    row.map((_, b) => f(Array.from({ length: 2 * W + 1 }, (_, d) => row[(b + d - W + A) % A])));
+  const upper = (row: Float32Array) =>
+    around(around(row, (v) => Math.max(...v)), (v) => v.reduce((m, x) => m + x, 0) / v.length);
   // Дээд цагираг халатны гадаргуу дээр, доошлох тусам бие бүрхэх хэмжээгээр шулуун унжина
-  const radii: Float32Array[] = [smooth(rows[0]).map((r, b) => Math.max(r, shellMax[b]) + 0.01 * U)];
+  const radii: Float32Array[] = [upper(rows[0].map((r, b) => Math.max(r, shell[b]))).map((r) => r + 0.01 * U)];
   for (let j = 1; j < RINGS; j++) {
     const below = smooth(rows[j]);
     radii.push(radii[j - 1].map((r, b) => Math.max(r, below[b] + 0.022 * U) + 0.003 * U));
   }
+
+  // Оройд хэвтээ бүс: хормой ба халатны завсрыг хаана (дээрээс харахад дотор тал харагдахгүй).
+  // Халатны гадаргуугаас бага зэрэг дотор эхэлж, оройн цагирагтай ижил өндөрт байна.
+  const waist = new Float32Array(A);
+  for (const i of ids) {
+    if (Math.abs(pos.getY(i) - top) > 0.015 * U) continue;
+    const b = binOf(Math.atan2(pos.getX(i), pos.getZ(i) - cz));
+    waist[b] = Math.max(waist[b], Math.hypot(pos.getX(i), pos.getZ(i) - cz));
+  }
+  for (let pass = 0; pass < A && waist.some((r) => r === 0); pass++)
+    waist.forEach((r, b) => {
+      if (!r) waist[b] = Math.max(waist[(b + A - 1) % A], waist[(b + 1) % A]);
+    });
+  ys.unshift(top);
+  radii.unshift(waist.map((r, b) => Math.min(r - 0.005 * U, radii[0][b] - 0.01 * U)));
 
   const SEG = 72;
   const verts: number[] = [];
   const skinIndex: number[] = [];
   const skinWeight: number[] = [];
   const index: number[] = [];
-  for (let j = 0; j < RINGS; j++) {
-    const t = j / (RINGS - 1);
+  for (let j = 0; j < ys.length; j++) {
+    const t = Math.max(0, j - 1) / (RINGS - 1);
     // Бүсэлхийд товчтой, хормой руугаа бага зэрэг задарна (рад)
     const open = 0.03 + 0.3 * t ** 1.5;
     for (let s = 0; s <= SEG; s++) {
