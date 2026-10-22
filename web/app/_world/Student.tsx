@@ -18,6 +18,8 @@ import { type Anim, type Avatar, KIDS, PACE, animUrl, kidUrl } from "./avatar";
 const HEIGHT = 1.58; // 8-р ангийн сурагчийн өндөр (м)
 const U = 100; // загварын нэгж / метр
 const ANIMS: Anim[] = ["idle", "walk", "run"];
+// Хормойн оёдлын цагирагийн өнцгийн нүд (халат, хормой хоёр хуваалцана)
+const SEAM_A = 48;
 
 const TORSO_BONES = /(Spine|Clavicle)/;
 const SLEEVE_BONES = /(UpperArm|Forearm)/;
@@ -305,12 +307,36 @@ function tailorBody(mesh: THREE.SkinnedMesh): number {
   hangStraight(pos, torso, 0.035 * U, 0.012 * U); // гар биеэр нэвтрэхгүйн тулд тэлэлт хязгаартай
   // Доод 5 см-т тэлэлтийг аажим бууруулна: тэлсэн, тэлээгүй оройн хоорондох гурвалжин
   // ирмэг дээр шүд гаргахгүй, халат биед зөөлөн шингэж хормойн доор орно
-  const FADE = 0.05 * U;
+  const FADE = 0.03 * U; // хормойн оройгоос (доод ирмэгээс 4 см) доор дуусна
   torso.forEach((i, n) => {
     const f = THREE.MathUtils.smoothstep(pos.getY(i), bottom, bottom + FADE);
     if (f < 1) pos.setXYZ(i, THREE.MathUtils.lerp(flat[n][0], pos.getX(i), f), pos.getY(i), THREE.MathUtils.lerp(flat[n][1], pos.getZ(i), f));
   });
   // Хормойн орой (доод ирмэгээс 4 см дээш) хүртэлх хэсэг ташаатай хамт, түүнээс 10 см дээш аажим нуруу руу
+  // Хормой эхлэх оёдол: оёдлын орчмын халат хормойн оройн цагирагаас гадагш товойхгүй (шүд гаргахгүй).
+  // Халат мөр бүрийг өөр төвөөс унжуулдаг тул нэг төв, нэг цагирагаар хязгаарлаж хормойтой хуваалцана.
+  const seamY = bottom + 0.04 * U;
+  const band = torso.filter((i) => Math.abs(pos.getY(i) - seamY) < 0.015 * U);
+  const seamZ = band.reduce((m, i) => m + pos.getZ(i), 0) / Math.max(1, band.length);
+  const seamR = new Float32Array(SEAM_A);
+  const seamBin = (i: number) =>
+    Math.floor(((Math.atan2(pos.getX(i), pos.getZ(i) - seamZ) + Math.PI) / (2 * Math.PI)) * SEAM_A) % SEAM_A;
+  for (const i of band) seamR[seamBin(i)] = Math.max(seamR[seamBin(i)], Math.hypot(pos.getX(i), pos.getZ(i) - seamZ));
+  for (let pass = 0; pass < SEAM_A && seamR.some((r) => r === 0); pass++)
+    seamR.forEach((r, b) => {
+      if (!r) seamR[b] = Math.max(seamR[(b + SEAM_A - 1) % SEAM_A], seamR[(b + 1) % SEAM_A]);
+    });
+  for (const i of torso) {
+    const y = pos.getY(i);
+    const x = pos.getX(i);
+    const z = pos.getZ(i) - seamZ;
+    const r = Math.hypot(x, z);
+    const lim = seamR[seamBin(i)];
+    if (y > seamY + 0.06 * U || r <= lim) continue;
+    const k = (lim + (r - lim) * THREE.MathUtils.smoothstep(y, seamY, seamY + 0.06 * U)) / r;
+    pos.setXYZ(i, x * k, y, seamZ + z * k);
+  }
+  g.userData.seam = { y: seamY, z: seamZ, r: seamR };
   blendWaist(mesh, torso, bottom + 0.14 * U, bottom + 0.04 * U);
   for (const s of ["L", "R"] as const) {
     blendShoulder(mesh, s);
@@ -329,7 +355,7 @@ function tailorBody(mesh: THREE.SkinnedMesh): number {
 }
 
 /** Халатны хормой: урд талаараа задгай, гуяыг дагаж савлана */
-function buildSkirt(body: THREE.SkinnedMesh, coatBottom: number, material: THREE.Material) {
+function buildSkirt(body: THREE.SkinnedMesh, material: THREE.Material) {
   const bones = body.skeleton.bones;
   const at = (n: string) => bones.findIndex((b) => b.name === n);
   const P = at("Bip02_Pelvis");
@@ -339,16 +365,16 @@ function buildSkirt(body: THREE.SkinnedMesh, coatBottom: number, material: THREE
   const knee = bones[at("Bip02_L_Calf")].getWorldPosition(new THREE.Vector3()).y;
   const hem = knee + 0.35 * (hip - knee);
   // Их биеийн халаттай давхцаж эхэлснээр бүсэлхийд завсар гарахгүй
-  const top = coatBottom + 0.04 * U;
+  const seam = body.geometry.userData.seam as { y: number; z: number; r: Float32Array };
+  const top = seam.y;
 
   const pos = body.geometry.getAttribute("position");
   const names = dominantBones(body);
   const ids: number[] = [];
   for (let i = 0; i < pos.count; i++) if (HIP_BONES.test(names[i]) || TORSO_BONES.test(names[i])) ids.push(i);
-  const hipIds = ids.filter((i) => pos.getY(i) <= top && pos.getY(i) >= hem);
-  const cz = hipIds.reduce((s, i) => s + pos.getZ(i), 0) / Math.max(1, hipIds.length);
+  const cz = seam.z;
 
-  const A = 48;
+  const A = SEAM_A;
   const RINGS = 8;
   const binOf = (a: number) => Math.floor(((a + Math.PI) / (2 * Math.PI)) * A) % A;
   const ys = Array.from({ length: RINGS }, (_, j) => top + ((hem - top) * j) / (RINGS - 1));
@@ -367,24 +393,10 @@ function buildSkirt(body: THREE.SkinnedMesh, coatBottom: number, material: THREE
     const m = row.map((_, b) => Math.max(row[(b + A - 1) % A], row[b], row[(b + 1) % A]));
     return m.map((_, b) => (m[(b + A - 2) % A] + m[(b + A - 1) % A] + m[b] + m[(b + 1) % A] + m[(b + 2) % A]) / 5);
   };
-  // Их биеийн халатны доод хэсэг (давхцах бүс) хормойн дотор бүрэн орно: огтлолцож шүд гаргахгүй
-  const shell = new Float32Array(A);
-  for (const i of ids) {
-    const y = pos.getY(i);
-    if (y < coatBottom - 0.01 * U || y > top + 0.12 * U) continue;
-    const x = pos.getX(i);
-    const z = pos.getZ(i) - cz;
-    const b = binOf(Math.atan2(x, z));
-    shell[b] = Math.max(shell[b], Math.hypot(x, z));
-  }
-  // Жигд дээд бүрхүүл: ±W нүдний дээд утгыг ±W-ээр дундажлахад анхны утгаас хэзээ ч бага болохгүй
-  const W = 3;
-  const around = (row: Float32Array, f: (v: number[]) => number) =>
-    row.map((_, b) => f(Array.from({ length: 2 * W + 1 }, (_, d) => row[(b + d - W + A) % A])));
-  const upper = (row: Float32Array) =>
-    around(around(row, (v) => Math.max(...v)), (v) => v.reduce((m, x) => m + x, 0) / v.length);
-  // Дээд цагираг халатны гадаргууд наалдана (тусдаа хэсэг шиг товойхгүй), доошлох тусам бие бүрхэх хэмжээгээр унжина
-  const radii: Float32Array[] = [upper(rows[0].map((r, b) => Math.max(r, shell[b]))).map((r) => r + 0.003 * U)];
+  // Оройн цагираг халатны оёдлын цагираг дээр наалдана (халат түүнээс гадагш гардаггүй тул шүд, завсаргүй)
+  const radii: Float32Array[] = [
+    seam.r.map((_, b) => Math.max(seam.r[(b + A - 1) % A], seam.r[b], seam.r[(b + 1) % A]) + 0.003 * U),
+  ];
   for (let j = 1; j < RINGS; j++) {
     const below = smooth(rows[j]);
     radii.push(radii[j - 1].map((r, b) => Math.max(r, below[b] + 0.012 * U)));
@@ -717,9 +729,9 @@ function StudentBody({ avatar, anim, ikRef, firstPerson = false }: Props) {
       if (name === "head") head = mesh;
     });
     if (body) {
-      const coatBottom = tailorBody(body);
+      tailorBody(body);
       dressBody(body.material as THREE.MeshStandardMaterial, u);
-      body.parent?.add(buildSkirt(body, coatBottom, skirtMaterial));
+      body.parent?.add(buildSkirt(body, skirtMaterial));
     }
     const g = head ? buildGoggles(m, head) : null;
     return { model: m, uniforms: u, skirtMat: skirtMaterial, goggles: g, headMesh: head ?? null, scale: HEIGHT / top };
