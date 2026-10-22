@@ -383,35 +383,20 @@ function buildSkirt(body: THREE.SkinnedMesh, coatBottom: number, material: THREE
     row.map((_, b) => f(Array.from({ length: 2 * W + 1 }, (_, d) => row[(b + d - W + A) % A])));
   const upper = (row: Float32Array) =>
     around(around(row, (v) => Math.max(...v)), (v) => v.reduce((m, x) => m + x, 0) / v.length);
-  // Дээд цагираг халатны гадаргуу дээр, доошлох тусам бие бүрхэх хэмжээгээр шулуун унжина
-  const radii: Float32Array[] = [upper(rows[0].map((r, b) => Math.max(r, shell[b]))).map((r) => r + 0.01 * U)];
+  // Дээд цагираг халатны гадаргууд наалдана (тусдаа хэсэг шиг товойхгүй), доошлох тусам бие бүрхэх хэмжээгээр унжина
+  const radii: Float32Array[] = [upper(rows[0].map((r, b) => Math.max(r, shell[b]))).map((r) => r + 0.003 * U)];
   for (let j = 1; j < RINGS; j++) {
     const below = smooth(rows[j]);
-    radii.push(radii[j - 1].map((r, b) => Math.max(r, below[b] + 0.022 * U) + 0.003 * U));
+    radii.push(radii[j - 1].map((r, b) => Math.max(r, below[b] + 0.012 * U)));
   }
-
-  // Оройд хэвтээ бүс: хормой ба халатны завсрыг хаана (дээрээс харахад дотор тал харагдахгүй).
-  // Халатны гадаргуугаас бага зэрэг дотор эхэлж, оройн цагирагтай ижил өндөрт байна.
-  const waist = new Float32Array(A);
-  for (const i of ids) {
-    if (Math.abs(pos.getY(i) - top) > 0.015 * U) continue;
-    const b = binOf(Math.atan2(pos.getX(i), pos.getZ(i) - cz));
-    waist[b] = Math.max(waist[b], Math.hypot(pos.getX(i), pos.getZ(i) - cz));
-  }
-  for (let pass = 0; pass < A && waist.some((r) => r === 0); pass++)
-    waist.forEach((r, b) => {
-      if (!r) waist[b] = Math.max(waist[(b + A - 1) % A], waist[(b + 1) % A]);
-    });
-  ys.unshift(top);
-  radii.unshift(waist.map((r, b) => Math.min(r - 0.005 * U, radii[0][b] - 0.01 * U)));
 
   const SEG = 72;
   const verts: number[] = [];
   const skinIndex: number[] = [];
   const skinWeight: number[] = [];
   const index: number[] = [];
-  for (let j = 0; j < ys.length; j++) {
-    const t = Math.max(0, j - 1) / (RINGS - 1);
+  for (let j = 0; j < RINGS; j++) {
+    const t = j / (RINGS - 1);
     // Бүсэлхийд товчтой, хормой руугаа бага зэрэг задарна (рад)
     const open = 0.03 + 0.3 * t ** 1.5;
     for (let s = 0; s <= SEG; s++) {
