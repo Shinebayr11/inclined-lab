@@ -20,6 +20,8 @@ const U = 100; // загварын нэгж / метр
 const ANIMS: Anim[] = ["idle", "walk", "run"];
 // Хормойн оёдлын цагирагийн өнцгийн нүд (халат, хормой хоёр хуваалцана)
 const SEAM_A = 48;
+// Халатны зузаан (биеэс гадагш): биеийн хэмжээнд наалдана
+const COAT_PAD = 0.006 * U;
 
 const TORSO_BONES = /(Spine|Clavicle)/;
 const SLEEVE_BONES = /(UpperArm|Forearm)/;
@@ -263,7 +265,7 @@ function tailorBody(mesh: THREE.SkinnedMesh): number {
   const hips: number[] = [];
   const sleeves: Record<"L" | "R", number[]> = { L: [], R: [] };
   const caps: Record<"L" | "R", number[]> = { L: [], R: [] };
-  const inflate = (i: number, t = 0.012 * U) =>
+  const inflate = (i: number, t = COAT_PAD) =>
     pos.setXYZ(i, pos.getX(i) + nor.getX(i) * t, pos.getY(i) + nor.getY(i) * t, pos.getZ(i) + nor.getZ(i) * t);
   const shoulder = (["L", "R"] as const).map((s) =>
     mesh.skeleton.getBoneByName(`Bip02_${s}_UpperArm`)?.getWorldPosition(new THREE.Vector3()),
@@ -304,7 +306,7 @@ function tailorBody(mesh: THREE.SkinnedMesh): number {
       torso.push(i);
     }
   const flat = torso.map((i) => [pos.getX(i), pos.getZ(i)]);
-  hangStraight(pos, torso, 0.035 * U, 0.012 * U); // гар биеэр нэвтрэхгүйн тулд тэлэлт хязгаартай
+  hangStraight(pos, torso, 0.015 * U, COAT_PAD); // биеэс хол товойхгүй: зөвхөн хонхорыг дүүргэнэ
   // Доод 5 см-т тэлэлтийг аажим бууруулна: тэлсэн, тэлээгүй оройн хоорондох гурвалжин
   // ирмэг дээр шүд гаргахгүй, халат биед зөөлөн шингэж хормойн доор орно
   const FADE = 0.03 * U; // хормойн оройгоос (доод ирмэгээс 4 см) доор дуусна
@@ -343,7 +345,7 @@ function tailorBody(mesh: THREE.SkinnedMesh): number {
     const joint = (n: string) =>
       mesh.skeleton.getBoneByName(`Bip02_${s}_${n}`)?.getWorldPosition(new THREE.Vector3());
     const joints = [joint("UpperArm"), joint("Forearm"), joint("Hand")];
-    if (joints.every(Boolean)) smoothSleeve(pos, nor, sleeves[s], joints as THREE.Vector3[], caps[s], 0.012 * U);
+    if (joints.every(Boolean)) smoothSleeve(pos, nor, sleeves[s], joints as THREE.Vector3[], caps[s], COAT_PAD);
     else for (const i of sleeves[s]) inflate(i);
   }
   pos.needsUpdate = true;
@@ -399,7 +401,7 @@ function buildSkirt(body: THREE.SkinnedMesh, material: THREE.Material) {
   ];
   for (let j = 1; j < RINGS; j++) {
     const below = smooth(rows[j]);
-    radii.push(radii[j - 1].map((r, b) => Math.max(r, below[b] + 0.012 * U)));
+    radii.push(radii[j - 1].map((r, b) => Math.max(r, below[b] + COAT_PAD)));
   }
 
   const SEG = 72;
